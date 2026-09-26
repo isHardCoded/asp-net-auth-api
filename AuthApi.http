@@ -1,0 +1,55 @@
+@host = http://localhost:5033
+
+### 1. Регистрация
+POST {{host}}/api/auth/register
+Content-Type: application/json
+
+{ "email": "user@example.com", "password": "User123!" }
+
+### 2. Логин: получаем пару токенов
+# @name loginUser
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "email": "user@example.com", "password": "User123!" }
+
+### 3. Доступ с access-токеном: ожидаем 200
+GET {{host}}/api/auth/me
+Authorization: Bearer {{loginUser.response.body.$.accessToken}}
+
+### 4. Подождите 1 минуту и повторите запрос 3: ожидаем 401
+
+### 5. Обновление: ожидаем 200 и НОВУЮ пару токенов
+# @name refreshUser
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{loginUser.response.body.$.refreshToken}}" }
+
+### 6. Новый access-токен работает: ожидаем 200
+GET {{host}}/api/auth/me
+Authorization: Bearer {{refreshUser.response.body.$.accessToken}}
+
+### 7. Повторно используем СТАРЫЙ refresh-токен: ожидаем 401 "Все сессии завершены"
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{loginUser.response.body.$.refreshToken}}" }
+
+### 8. НОВЫЙ refresh-токен тоже отозван после обнаружения кражи: ожидаем 401
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{refreshUser.response.body.$.refreshToken}}" }
+
+### 9. Выход: ожидаем 204
+POST {{host}}/api/auth/logout
+Content-Type: application/json
+
+{ "refreshToken": "{{loginUser.response.body.$.refreshToken}}" }
+
+### 10. Обновление после выхода: ожидаем 401
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{loginUser.response.body.$.refreshToken}}" }

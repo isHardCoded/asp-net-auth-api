@@ -66,13 +66,9 @@ public class AuthController : ControllerBase
       return Unauthorized("Неверный email или пароль");
     }
 
-    var token = _jwtService.CreateToken(user);
+    var response = await IssueTokensAsync(user);
 
-    return Ok(new AuthResponse
-    {
-      Token = token,
-      Email = user.Email
-    });
+    return Ok(response);
   }
 
   // me
@@ -101,5 +97,101 @@ public class AuthController : ControllerBase
       user.Role,
       user.CreatedAt
     });
+  }
+
+    private async Task<AuthResponse> IssueTokensAsync(User user, RefreshToken? oldToken = null)
+  {
+    var accessToken = _jwtService.CreateToken(user);
+    var refreshToken = _jwtService.CreateRefreshToken();
+    var refreshTokenHash = _jwtService.HashToken(refreshToken);
+
+    // Ротация: если это обновление, отзываем старый токен
+    if (oldToken != null)
+    {
+      oldToken.RevokedAt = DateTime.UtcNow;
+      oldToken.ReplacedByTokenHash = refreshTokenHash;
+    }
+
+    _db.RefreshTokens.Add(new RefreshToken
+    {
+      TokenHash = refreshTokenHash,   // в БД только хэш
+      UserId = user.Id,
+      ExpiresAt = _jwtService.GetRefreshTokenExpiry()
+    });
+
+    await _db.SaveChangesAsync();
+
+    return new AuthResponse
+    {
+      AccessToken = accessToken,
+      RefreshToken = refreshToken,    // клиенту отдаём сам токен
+      Email = user.Email,
+      Role = user.Role
+    };
+  }
+
+  private async Task RevokeAllUserTokensAsync(int userId)
+  {
+    var activeTokens = await _db.RefreshTokens
+      .Where(token => token.UserId == userId && token.RevokedAt == null)
+      .ToListAsync();
+
+    foreach (var token in activeTokens)
+    {
+      token.RevokedAt = DateTime.UtcNow;
+    }
+
+    await _db.SaveChangesAsync();
+  }
+
+  [HttpPost("refresh")]
+  [AllowAnonymous]
+  public async Task<ActionResult<AuthResponse>> Refresh(RefreshRequest request)
+  {
+    var tokenHash = _jwtService.HashToken(request.RefreshToken);
+
+    var storedToken = await _db.RefreshTokens
+      .Include(token => token.User)
+      .FirstOrDefaultAsync(token => token.TokenHash == tokenHash);
+
+    if (storedToken == null)
+    {
+      return Unauthorized("Недействительный refresh-токен");
+    }
+
+    // Токен уже отозван, но им снова пытаются воспользоваться.
+    // Значит, его украли: отзываем ВСЕ сессии пользователя.
+    if (storedToken.IsRevoked)
+    {
+      await RevokeAllUserTokensAsync(storedToken.UserId);
+      return Unauthorized("Refresh-токен уже использован. Все сессии завершены");
+    }
+
+    if (storedToken.IsExpired)
+    {
+      return Unauthorized("Срок действия refresh-токена истёк");
+    }
+
+    var response = await IssueTokensAsync(storedToken.User, storedToken);
+
+    return Ok(response);
+  }
+
+    [HttpPost("logout")]
+  [AllowAnonymous]
+  public async Task<IActionResult> Logout(RefreshRequest request)
+  {
+    var tokenHash = _jwtService.HashToken(request.RefreshToken);
+
+    var storedToken = await _db.RefreshTokens
+      .FirstOrDefaultAsync(token => token.TokenHash == tokenHash);
+
+    if (storedToken != null && storedToken.IsActive)
+    {
+      storedToken.RevokedAt = DateTime.UtcNow;
+      await _db.SaveChangesAsync();
+    }
+
+    return NoContent();
   }
 }

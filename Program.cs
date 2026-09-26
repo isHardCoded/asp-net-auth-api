@@ -1,6 +1,7 @@
 using System.Text;
 using authApi.Data;
 using authApi.Services;
+using authApi.Security;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -35,11 +36,23 @@ builder.Services.AddAuthentication(options =>
        ValidateIssuerSigningKey = true,
        ValidIssuer = builder.Configuration["Jwt:Issuer"],
        ValidAudience = builder.Configuration["Jwt:Audience"],
-       IssuerSigningKey = new SymmetricSecurityKey(keyBytes)
+       IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+       ClockSkew = TimeSpan.Zero 
    };
 });
 
+builder.Services.AddAuthorization(options =>
+{
+   options.AddPolicy(Policies.AdminOnly, policy =>
+       policy.RequireRole(Roles.Admin));
+
+   options.AddPolicy(Policies.ManagerOrAdmin, policy =>
+       policy.RequireRole(Roles.Manager, Roles.Admin));   // ИЛИ: любая из ролей
+});
+
 var app = builder.Build();
+
+DbSeeder.SeedAdmin(app.Services, app.Configuration);   // добавить
 
 app.UseAuthentication();
 
